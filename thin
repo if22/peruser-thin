@@ -1,0 +1,127 @@
+#!/bin/bash
+### BEGIN INIT INFO
+# Provides:          thin
+# Required-Start:    $local_fs $remote_fs
+# Required-Stop:     $local_fs $remote_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      S 0 1 6
+# Short-Description: thin initscript
+# Description:       thin with per-user rbenv
+### END INIT INFO
+
+
+HOME_DIR=/home
+#CONFIG_DIR=/etc/thin - To be or not to be?
+CONFIG_EXT=".yml"
+DISABLED_EXT=".disabled"
+
+get_list () {
+    users=$(ls $HOME_DIR)
+    i=0
+    for user in ${users}; do
+        if [[ -d ${HOME_DIR}/${user}/.rbenv ]]; then
+            if [[ -f ${HOME_DIR}/${user}/${user}${CONFIG_EXT} ]]; then
+                envs[$i]="${user} - enabled"
+                i=$(($i+1))
+            elif [[ -f ${HOME_DIR}/${user}/${user}${DISABLED_EXT} ]]; then
+                envs[$i]="${user} - disabled"
+                i=$(($i+1))
+            else
+                envs[$i]="${user} - not confiured"
+               i=$(($i+1))
+            fi
+        fi
+    done
+    if [ ${#envs[*]} -eq 0 ]; then
+        echo "No apps found in ${HOME_DIR}"
+        exit 0
+    fi
+    echo "Applications:"
+    for ((a=0; a < ${#envs[*]}; a++)); do
+        echo "  ${envs[$a]}"
+    done
+}
+
+app_ctl () {
+    local command=$1; shift
+    if [ $# -eq 0 ]; then
+        users=$(ls $HOME_DIR)
+        case ${command} in
+            start|stop|restart)
+                for user in ${users}; do
+                    if [[ -d ${HOME_DIR}/${user}/.rbenv ]]; then
+                        thin_bin=${HOME_DIR}/${user}/.rbenv/shims/thin
+                        bundle_bin=${HOME_DIR}/${user}/.rbenv/shims/bundle
+                        thin_app_config=${HOME_DIR}/${user}/${user}${CONFIG_EXT}
+                        [ ! -x ${thin_bin} ] && echo "error: whereis no thin for ${user} user!"
+                        if [ -f ${thin_app_config} ]; then
+                            ${thin_bin} -C ${thin_app_config} ${command}
+                        elif [ -f ${thin_app_config}.disabled ];then
+                            echo "note: ${user} app is disabled. Skipping."
+                        else
+                            echo "error: ${user} has no config file or app . Skipping."
+                        fi
+
+                    fi
+                done
+            ;;
+            list)
+                apps_get_list
+            ;;
+            *)
+                echo "Unknown command: ${command}"
+            ;;
+        esac
+    fi
+}
+
+app_config () {
+    local app=$2; shift
+    if [[ ! -d ${HOME_DIR}/${app}/.rbenv ]]; then
+        echo "error: there is no rbenv installed! Please install it first."
+        echo "${HOME_DIR}/${app}/.rbenv"
+        exit 1
+    fi
+    APP_DIR="${HOME_DIR}/${app}"
+    APP_CONFIG="${HOME_DIR}/${app}/${app}${CONFIG_EXT}${DISABLED_EXT}"
+    THIN_BIN="${APP_DIR}/.rbenv/shims/thin"
+    [ ! -f ${THIN_BIN} ] && echo "error: thin is not found!" && exit 1
+    echo "  Creating config for app: ${app}"
+    ${THIN_BIN} config -C "${APP_CONFIG}" \
+    -u ${app} -g ${app} --tag thin_${app} \
+    -s 1 --max-conns 256 --max-persistent-conns 256 \
+    -S ${APP_DIR}/tmp/${app}.sock \
+    -c ${APP_DIR}/public_html \
+    -l ${APP_DIR}/http_log/${app}-thin.log \
+    -A autodetect \
+    -e production \
+    --no-epoll --threaded
+    chown ${app}:${app} ${APP_CONFIG}
+}
+
+if [ $# -gt 2 ]; then
+    exit 2
+fi
+
+case "$1" in
+    start|stop|restart)
+        app_ctl "$@"
+        ;;
+    enable|disable)
+        [ -z "$2" ] && echo "error: missing app_name" && exit 1
+        $1_application "$2"
+        ;;
+    list)
+        get_list
+        ;;
+    config)
+        app_config "$@"
+        ;;
+    *)
+        echo "  Usage: $0 {start|stop|restart|enable|disable|config|list} [app_name]"
+        exit 2
+        ;;
+esac
+
+exit 0
+
